@@ -4,19 +4,27 @@ RAG-powered "Ask my blog" widget backend for jayanthkatta.com. Two Lambda
 functions behind an API Gateway HTTP API, fronted by a small JS widget
 embedded in the portfolio/blog pages (see `katta698.github.io`).
 
-This folder's Lambda code (`indexer/handler.py`, `query/handler.py`) is a
-reference copy pulled directly from the deployed code on 2026-06-26, since
-there was no local copy of the handlers anywhere on this machine before
-that. **The Terraform that actually provisions both Lambdas, IAM roles,
-the S3 bucket, API Gateway, and the EventBridge schedule already exists**
-— found at `C:\Projects\Engineering\Blogger\terraform\lambda.tf` (and
-neighboring `.tf` files in that same folder) — it just isn't colocated
-with the handler code. **Treat AWS as the source of truth for the Lambda
-code in this folder**; re-pull with
-`aws lambda get-function --function-name <name> --query Code.Location` if
-this drifts, or push local edits back with `update-function-code` (see
-below). For infra changes (new env vars, schedule, IAM), edit the
-Terraform in the `Blogger` repo instead of clicking around the console.
+**Correction (2026-06-26, later the same day):** this repo was originally
+created believing no source existed for this project anywhere — the Lambda
+code was pulled fresh from AWS because of that assumption. That was wrong.
+A source repo (`blog-infra`, formerly referred to locally as `Blogger`)
+already had both `lambdas/{indexer,query}/handler.py` *and* the full
+Terraform (`main.tf`, `iam.tf`, `lambda.tf`, `s3.tf`, `api_gateway.tf`,
+`eventbridge.tf`, `outputs.tf`, `variables.tf`) — just an older, partially
+uncommitted version that predated several fixes (including today's). To
+stop this project being split across two repos with silently-diverging
+copies, everything has now been consolidated here: the Terraform moved
+into `terraform/`, and this folder's `indexer/`/`query/` handlers (already
+the more current version, since they include today's fixes) are now the
+single source of truth. The old `lambdas/` and `terraform/` folders were
+deleted from `blog-infra` in the same session.
+
+**This repo (not AWS, not `blog-infra`) is now the source of truth** for
+both the Lambda code and the infrastructure. To deploy changes, build a zip
+and either `terraform apply` (after building `dist/indexer.zip` and
+`dist/query.zip` — see `terraform/lambda.tf` for the exact expected paths)
+or `aws lambda update-function-code` directly (see Redeploy commands
+below) for a quick code-only change without a full Terraform run.
 
 ## Architecture
 
