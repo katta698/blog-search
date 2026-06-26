@@ -1,0 +1,149 @@
+/* Blog Search Widget — matches Jayanth Katta's AWS-styled Blogger theme
+   Dark default: #1A2332 bg, #FF9900 accent, Inter font
+   Light mode:   .jk-light-mode body, #F8F8F8 bg                          */
+
+.jk-search-widget {
+  margin: 0 0 24px 0;
+  font-family: 'Inter', sans-serif;
+  font-size: 14px;
+}
+
+/* ── Form row ─────────────────────────────────────────────────────────── */
+
+.jk-search-widget__form {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  border-bottom: 1px solid #2d3a4a;
+  padding-bottom: 8px;
+  transition: border-color 0.2s;
+}
+
+.jk-search-widget__form:focus-within {
+  border-bottom-color: #FF9900;
+}
+
+.jk-search-widget__input {
+  flex: 1;
+  background: transparent;
+  border: 0;
+  outline: 0;
+  color: #e6edf3;
+  font-family: 'Inter', sans-serif;
+  font-size: 14px;
+  line-height: 40px;
+  height: 40px;
+  padding: 0;
+  min-width: 0;
+}
+
+.jk-search-widget__input::placeholder {
+  color: #8fa3b8;
+}
+
+.jk-search-widget__btn {
+  background: transparent;
+  border: 0;
+  outline: 0;
+  cursor: pointer;
+  color: #FF9900;
+  font-family: 'Inter', sans-serif;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  height: 40px;
+  padding: 0 0 0 10px;
+  white-space: nowrap;
+  transition: opacity 0.2s;
+  flex-shrink: 0;
+}
+
+.jk-search-widget__btn:hover { opacity: 0.75; }
+.jk-search-widget__btn:disabled { opacity: 0.3; cursor: not-allowed; }
+
+/* ── Result area ──────────────────────────────────────────────────────── */
+
+.jk-search-widget__result {
+  margin-top: 16px;
+}
+
+.jk-search-widget__answer {
+  color: #c9d1d9;
+  font-size: 14px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  margin: 0 0 12px;
+}
+
+.jk-search-widget__sources {
+  padding-top: 10px;
+  border-top: 1px solid #2d3a4a;
+}
+
+.jk-search-widget__sources-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #8fa3b8;
+  margin-bottom: 6px;
+}
+
+.jk-search-widget__sources a {
+  display: block;
+  font-size: 13px;
+  color: #0073BB;
+  text-decoration: none;
+  margin-bottom: 4px;
+  transition: color 0.15s;
+}
+
+.jk-search-widget__sources a:hover { color: #FF9900; }
+
+.jk-search-widget__spinner {
+  margin-top: 12px;
+  color: #8fa3b8;
+  font-size: 13px;
+  font-style: italic;
+}
+
+.jk-search-widget__error {
+  margin-top: 12px;
+  color: #e57373;
+  font-size: 13px;
+}
+
+/* ── Light mode overrides (.jk-light-mode on <body>) ─────────────────── */
+
+body.jk-light-mode .jk-search-widget__form {
+  border-bottom-color: #D5DBDB;
+}
+
+body.jk-light-mode .jk-search-widget__form:focus-within {
+  border-bottom-color: #FF9900;
+}
+
+body.jk-light-mode .jk-search-widget__input {
+  color: #16191F;
+}
+
+body.jk-light-mode .jk-search-widget__input::placeholder {
+  color: #545B64;
+}
+
+body.jk-light-mode .jk-search-widget__answer {
+  color: #16191F;
+}
+
+body.jk-light-mode .jk-search-widget__sources {
+  border-top-color: #D5DBDB;
+}
+
+body.jk-light-mode .jk-search-widget__sources-label {
+  color: #545B64;
+}
+
+body.jk-light-mode .jk-search-widget__spinner {
+  color: #545B64;
+}

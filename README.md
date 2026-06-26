@@ -26,6 +26,20 @@ and either `terraform apply` (after building `dist/indexer.zip` and
 or `aws lambda update-function-code` directly (see Redeploy commands
 below) for a quick code-only change without a full Terraform run.
 
+## Other files moved here during consolidation
+
+- `scripts/build_lambdas.sh` / `.ps1` — packages `indexer/` and `query/` into
+  `dist/indexer.zip` / `dist/query.zip` for Terraform to deploy. Paths
+  updated for this repo's flat layout (was `lambdas/$name`, now just
+  `$name`, since there's no `lambdas/` parent folder here).
+- `scripts/attach_permissions.ps1` — one-time IAM bootstrap for the
+  `terraform-user` that applies this Terraform.
+- `widget/search.css` / `search.js` — **not the live widget.** This is an
+  earlier prototype that was never actually wired up (the real "Ask my
+  blog" widget on jayanthkatta.com is embedded directly in
+  `katta698.github.io/index.html` as an inline terminal-style overlay, not
+  loaded from these files). Kept for reference only.
+
 ## Architecture
 
 ```
