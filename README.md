@@ -4,12 +4,19 @@ RAG-powered "Ask my blog" widget backend for jayanthkatta.com. Two Lambda
 functions behind an API Gateway HTTP API, fronted by a small JS widget
 embedded in the portfolio/blog pages (see `katta698.github.io`).
 
-This folder is a local reference copy pulled directly from the deployed
-Lambda code on 2026-06-26 — there was no source repo for this project on
-this machine before that. **Treat AWS as the source of truth**; re-pull with
+This folder's Lambda code (`indexer/handler.py`, `query/handler.py`) is a
+reference copy pulled directly from the deployed code on 2026-06-26, since
+there was no local copy of the handlers anywhere on this machine before
+that. **The Terraform that actually provisions both Lambdas, IAM roles,
+the S3 bucket, API Gateway, and the EventBridge schedule already exists**
+— found at `C:\Projects\Engineering\Blogger\terraform\lambda.tf` (and
+neighboring `.tf` files in that same folder) — it just isn't colocated
+with the handler code. **Treat AWS as the source of truth for the Lambda
+code in this folder**; re-pull with
 `aws lambda get-function --function-name <name> --query Code.Location` if
 this drifts, or push local edits back with `update-function-code` (see
-below).
+below). For infra changes (new env vars, schedule, IAM), edit the
+Terraform in the `Blogger` repo instead of clicking around the console.
 
 ## Architecture
 
@@ -71,6 +78,21 @@ happened to talk about being recent. Now:
   run. Removed the now-stale `BLOGGER_FEED_URL` env var, added `RSS_FEED_URL`
   explicitly. Same day, also fixed the "latest post" recency gap described
   above (post_date field + recency-intent detection).
+- **2026-06-26 (later same day)**: `build_rss_feed()` in `sync_blog.py` was
+  capping the feed at the 20 most recent posts (originally fine — that feed
+  was only used for the profile README's "latest posts" list). Once the
+  indexer started reading from this same feed, the cap became a real
+  regression: the other 38 older posts silently became unsearchable, not
+  just absent from a recency list. Removed the cap (now all posts), waited
+  for the rss.xml redeploy, re-invoked the indexer, and verified an older
+  post ("Day 5 - Terraform Variables") is retrievable again.
+- Also validated the original "I Built a RAG-Powered Search..." blog post
+  against reality and fixed several stale claims: it said "Blogger JSON
+  feed" (now RSS), "Nova Micro" (the deployed model is actually Nova Lite —
+  this was wrong even before today's changes), and "implemented with numpy"
+  (the real code never used numpy). Post count stats updated 54 → 58. The
+  post's Terraform claim was double-checked and is accurate — see the note
+  above about where that source actually lives.
 
 ## Redeploy commands
 
