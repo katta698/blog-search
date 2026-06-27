@@ -66,6 +66,26 @@ EventBridge rule "blog-search-reindex" (rate(1 day))
 - `indexer/handler.py` — `blog-search-indexer` Lambda. Builds the index.
 - `query/handler.py` — `blog-search-query` Lambda. Answers questions.
 
+## "Day N" / "Week N" questions (e.g. "Day 15", "Week 7")
+
+Fixed 2026-06-27. A query like "Day 15" carries almost no semantic content
+for an embedding model to latch onto — cosine similarity is built for
+"what's this about", not exact literal lookups by number. Two-part fix:
+- `indexer/handler.py` prepends `"Title: {title}. "` to each post's text
+  before chunking, so the title is part of every embedded chunk, not just
+  attached as metadata afterward. This alone wasn't enough — the query's
+  own embedding is too sparse to reliably win even when the title is
+  indexed.
+- `query/handler.py` now detects this pattern explicitly
+  (`find_post_by_day_week()` — a `day|week` word followed by a number) and
+  matches directly against `post_title` instead of relying on similarity
+  score. Same general approach as the recency-detection fix below: when a
+  query has a literal, checkable structure, don't make an embedding model
+  guess at something exact-match search already does perfectly.
+- Verified live: "Day 15" and "Week 7" both now correctly return their
+  respective posts; unrelated semantic questions ("how does cosine
+  similarity work") still work normally — no regression.
+
 ## Recency questions ("what's your latest post")
 
 Fixed 2026-06-26. Pure semantic similarity search has no concept of dates —

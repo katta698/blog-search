@@ -57,6 +57,13 @@ def fetch_all_posts():
         text = content.get_text(separator=" ")
         text = re.sub(r"\s+", " ", text).strip()
         if text:
+            # Prepend the title so every chunk of this post carries it, not
+            # just metadata attached after the fact. Without this, searching
+            # by the post's own title/number ("Day 15", "Week 6") fails —
+            # those words never otherwise appear in the body text, so a
+            # semantic match against the embedded chunks has nothing to
+            # latch onto even though the post obviously exists.
+            text = f"Title: {title}. {text}" if title else text
             posts.append({"title": title, "url": link, "text": text, "date": post_date})
 
     return posts

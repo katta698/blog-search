@@ -75,6 +75,32 @@ def latest_post_chunks(chunks):
     return [c for c in chunks if c["post_url"] == latest_url]
 
 
+# A query like "Day 15" or "Week 6" carries almost no semantic content for
+# an embedding model to latch onto — cosine similarity is built for "what's
+# this about", not exact literal lookups like a post's own day/week number.
+# Even with the title indexed in every chunk (see indexer/handler.py), the
+# query's own embedding is too sparse to reliably win. Detect this pattern
+# explicitly and match directly against post titles instead of relying on
+# similarity score at all.
+DAY_WEEK_PATTERN = re.compile(r"\b(day|week)\s*#?\s*(\d{1,3})\b", re.IGNORECASE)
+
+
+def find_post_by_day_week(question, chunks):
+    match = DAY_WEEK_PATTERN.search(question)
+    if not match:
+        return None
+    kind, number = match.group(1), match.group(2)
+    title_prefix = re.compile(rf"^{re.escape(kind)}\s*{re.escape(number)}\b", re.IGNORECASE)
+    matched_url = None
+    for c in chunks:
+        if title_prefix.search(c.get("post_title", "")):
+            matched_url = c["post_url"]
+            break
+    if not matched_url:
+        return None
+    return [c for c in chunks if c["post_url"] == matched_url]
+
+
 def ask_claude(question, top_chunks):
     context = "\n\n---\n\n".join(
         f"[{c['post_title']}]\n{c['chunk_text']}" for c in top_chunks
@@ -115,6 +141,8 @@ def lambda_handler(event, context):
         top_chunks = None
         if is_recency_question(question):
             top_chunks = latest_post_chunks(chunks)
+        if not top_chunks:
+            top_chunks = find_post_by_day_week(question, chunks)
 
         if not top_chunks:
             q_vec = embed(question)
