@@ -1,3 +1,5 @@
+data "aws_caller_identity" "current" {}
+
 data "aws_iam_policy_document" "lambda_assume_role" {
   statement {
     effect  = "Allow"
@@ -37,6 +39,25 @@ data "aws_iam_policy_document" "indexer_permissions" {
     actions = ["bedrock:InvokeModel"]
     resources = [
       "arn:aws:bedrock:${var.aws_region}::foundation-model/amazon.titan-embed-text-v2:0"
+    ]
+  }
+
+  # Claude Haiku 4.5 (at-a-glance summary generation, added 2026-07-24) only
+  # supports cross-region inference, not direct on-demand invoke by base
+  # model ID — confirmed live (ValidationException without this). Needs BOTH
+  # the inference-profile ARN (what the code actually calls) AND the
+  # underlying per-region foundation-model ARNs it's allowed to route
+  # through (verified via `aws bedrock get-inference-profile` — the
+  # us.anthropic.* profile spans exactly these 3 regions).
+  statement {
+    sid     = "SummaryClaudeHaiku"
+    effect  = "Allow"
+    actions = ["bedrock:InvokeModel", "bedrock:UseInferenceProfile"]
+    resources = [
+      "arn:aws:bedrock:${var.aws_region}:${data.aws_caller_identity.current.account_id}:inference-profile/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+      "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0",
+      "arn:aws:bedrock:us-east-2::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0",
+      "arn:aws:bedrock:us-west-2::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0",
     ]
   }
 }

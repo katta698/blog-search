@@ -8,13 +8,15 @@ import boto3
 INDEX_BUCKET = os.environ["INDEX_BUCKET"]
 REGION = os.environ["AWS_REGION_NAME"]
 INDEX_KEY = "index/chunks.json"
+SUMMARY_KEY = "index/summaries.json"
 TOP_K = 4
 CACHE_PATH = "/tmp/chunks.json"
 
 s3 = boto3.client("s3", region_name=REGION)
 bedrock = boto3.client("bedrock-runtime", region_name=REGION)
 
-_index_cache = None  # warm Lambda reuse
+_index_cache = None     # warm Lambda reuse
+_summary_cache = None   # warm Lambda reuse
 
 
 def load_index():
@@ -24,6 +26,18 @@ def load_index():
     obj = s3.get_object(Bucket=INDEX_BUCKET, Key=INDEX_KEY)
     _index_cache = json.loads(obj["Body"].read())
     return _index_cache
+
+
+def load_summaries():
+    global _summary_cache
+    if _summary_cache is not None:
+        return _summary_cache
+    try:
+        obj = s3.get_object(Bucket=INDEX_BUCKET, Key=SUMMARY_KEY)
+        _summary_cache = json.loads(obj["Body"].read())
+    except s3.exceptions.NoSuchKey:
+        _summary_cache = {}
+    return _summary_cache
 
 
 def embed(text):
@@ -130,6 +144,33 @@ def ask_claude(question, top_chunks):
 
 
 def lambda_handler(event, context):
+    method = (event.get("requestContext", {}).get("http", {}) or {}).get("method", "")
+    path = event.get("rawPath", "")
+    if method == "GET" and path == "/summary":
+        return handle_summary(event)
+    return handle_search(event)
+
+
+def handle_summary(event):
+    try:
+        params = event.get("queryStringParameters") or {}
+        slug = (params.get("slug") or "").strip()
+        if not slug:
+            return _resp(400, {"error": "slug is required"})
+        summary = load_summaries().get(slug)
+        if not summary:
+            return _resp(404, {"error": "no summary for this post"})
+        return _resp(200, {
+            "overview": summary["overview"],
+            "key_detail": summary["key_detail"],
+            "takeaway": summary["takeaway"],
+        })
+    except Exception as e:
+        print(f"Error (summary): {e}")
+        return _resp(500, {"error": "Internal server error"})
+
+
+def handle_search(event):
     try:
         body = json.loads(event.get("body") or "{}")
         question = (body.get("query") or body.get("question") or "").strip()

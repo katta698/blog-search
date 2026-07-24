@@ -4,7 +4,7 @@ resource "aws_apigatewayv2_api" "search" {
 
   cors_configuration {
     allow_origins = var.allowed_origins
-    allow_methods = ["POST", "OPTIONS"]
+    allow_methods = ["POST", "GET", "OPTIONS"]
     allow_headers = ["content-type"]
     max_age       = 300
   }
@@ -20,6 +20,15 @@ resource "aws_apigatewayv2_integration" "query" {
 resource "aws_apigatewayv2_route" "search" {
   api_id    = aws_apigatewayv2_api.search.id
   route_key = "POST /search"
+  target    = "integrations/${aws_apigatewayv2_integration.query.id}"
+}
+
+# At-a-glance summary widget (added 2026-07-24) — same query Lambda, which
+# dispatches on method+path internally (see query/handler.py lambda_handler),
+# so this reuses the existing integration rather than deploying a new function.
+resource "aws_apigatewayv2_route" "summary" {
+  api_id    = aws_apigatewayv2_api.search.id
+  route_key = "GET /summary"
   target    = "integrations/${aws_apigatewayv2_integration.query.id}"
 }
 

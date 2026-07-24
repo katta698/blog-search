@@ -17,9 +17,9 @@ resource "aws_lambda_function" "indexer" {
 
   environment {
     variables = {
-      INDEX_BUCKET     = aws_s3_bucket.index.id
-      BLOGGER_FEED_URL = var.blogger_feed_url
-      AWS_REGION_NAME  = var.aws_region
+      INDEX_BUCKET    = aws_s3_bucket.index.id
+      RSS_FEED_URL    = var.rss_feed_url
+      AWS_REGION_NAME = var.aws_region
     }
   }
 }
@@ -62,4 +62,12 @@ resource "aws_lambda_permission" "api_gateway_query" {
   function_name = aws_lambda_function.query.function_name
   principal     = "apigateway.amazonaws.com"
   source_arn    = "${aws_apigatewayv2_api.search.execution_arn}/*/*/search"
+}
+
+resource "aws_lambda_permission" "api_gateway_summary" {
+  statement_id  = "AllowAPIGatewayInvokeSummary"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.query.function_name
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_apigatewayv2_api.search.execution_arn}/*/*/summary"
 }
