@@ -8,6 +8,7 @@ import boto3
 
 INDEX_BUCKET = os.environ["INDEX_BUCKET"]
 FEEDBACK_TABLE = os.environ.get("FEEDBACK_TABLE", "")
+FEEDBACK_TOPIC = os.environ.get("FEEDBACK_TOPIC", "")
 REGION = os.environ["AWS_REGION_NAME"]
 INDEX_KEY = "index/chunks.json"
 SUMMARY_KEY = "index/summaries.json"
@@ -17,6 +18,7 @@ CACHE_PATH = "/tmp/chunks.json"
 s3 = boto3.client("s3", region_name=REGION)
 bedrock = boto3.client("bedrock-runtime", region_name=REGION)
 dynamodb = boto3.client("dynamodb", region_name=REGION)
+sns = boto3.client("sns", region_name=REGION)
 
 _index_cache = None     # warm Lambda reuse
 _summary_cache = None   # warm Lambda reuse
@@ -211,6 +213,8 @@ def handle_search(event):
 VOTES = ("up", "down")
 REASONS = ("too-shallow", "too-long", "not-what-i-expected", "something-is-wrong")
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,120}$")
+# The sort key this service hands back: an ISO timestamp, then a random suffix.
+VOTE_ID_RE = re.compile(r"^\d{4}-\d\d-\d\dT[\d:.]+Z#[0-9a-f]{8}$")
 
 
 def handle_feedback_vote(event):
@@ -232,23 +236,81 @@ def handle_feedback_vote(event):
         if reason and reason not in REASONS:
             return _resp(400, {"error": "unknown reason"})
 
+        # A down-vote arrives in two parts: the thumb first, then optionally a
+        # reason chip a moment later. The second call carries the id returned by
+        # the first and updates that row, because inserting again would count
+        # one unhappy reader twice. That is not hypothetical -- the first three
+        # real down-votes this table ever received were one person, recorded
+        # three times, before this existed.
+        vote_id = (body.get("id") or "").strip()
+        if vote_id:
+            if not VOTE_ID_RE.match(vote_id):
+                return _resp(400, {"error": "invalid id"})
+            if not reason:
+                return _resp(400, {"error": "id given without a reason"})
+            dynamodb.update_item(
+                TableName=FEEDBACK_TABLE,
+                Key={"slug": {"S": slug}, "voted_at": {"S": vote_id}},
+                UpdateExpression="SET #r = :r",
+                ExpressionAttributeNames={"#r": "reason"},
+                ExpressionAttributeValues={":r": {"S": reason}},
+                # Only annotate a row that exists. A bogus id must not create
+                # one, or the update path becomes a second way to insert.
+                ConditionExpression="attribute_exists(slug)",
+            )
+            notify(slug, vote, reason)
+            return _resp(200, {"ok": True, "id": vote_id})
+
+        # Random suffix so two votes in the same millisecond cannot overwrite
+        # each other -- the sort key is the only thing keeping them apart.
+        voted_at = (datetime.utcnow().isoformat(timespec="milliseconds")
+                    + "Z#" + os.urandom(4).hex())
         item = {
             "slug": {"S": slug},
-            # Random suffix so two votes in the same millisecond cannot
-            # overwrite each other -- the sort key is the only thing keeping
-            # them apart.
-            "voted_at": {"S": datetime.utcnow().isoformat(timespec="milliseconds")
-                              + "Z#" + os.urandom(4).hex()},
+            "voted_at": {"S": voted_at},
             "vote": {"S": vote},
         }
         if reason:
             item["reason"] = {"S": reason}
 
         dynamodb.put_item(TableName=FEEDBACK_TABLE, Item=item)
-        return _resp(200, {"ok": True})
+        # Always mail the vote itself, even though a reason may follow and mail
+        # again. Most people never pick a reason, so suppressing this one to
+        # avoid the occasional duplicate would silently drop the majority of
+        # down-votes -- the opposite of the point.
+        notify(slug, vote, reason)
+        return _resp(200, {"ok": True, "id": voted_at})
     except Exception as e:
         print(f"Error (feedback vote): {e}")
         return _resp(500, {"error": "Internal server error"})
+
+
+def notify(slug, vote, reason):
+    """Mail the vote. Never let a failure here cost the vote itself.
+
+    The put_item has already succeeded by the time this runs, so the record is
+    safe; a notification that does not go out is an annoyance, while an
+    exception raised here would turn a stored vote into a 500 and tell the
+    reader their click failed when it did not.
+    """
+    if not FEEDBACK_TOPIC:
+        return
+    word = "👍 useful" if vote == "up" else "👎 not useful"
+    lines = [
+        "%s\n" % word,
+        "Post:   %s" % slug,
+        "Link:   https://jayanthkatta.com/blog/%s/" % slug,
+    ]
+    if reason:
+        lines.append("Reason: %s" % reason.replace("-", " "))
+    try:
+        sns.publish(
+            TopicArn=FEEDBACK_TOPIC,
+            Subject=("Blog feedback: %s" % slug)[:100],
+            Message="\n".join(lines),
+        )
+    except Exception as e:
+        print(f"Error (feedback notify): {e}")
 
 
 def handle_feedback_counts(event):

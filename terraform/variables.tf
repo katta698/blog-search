@@ -39,3 +39,9 @@ variable "indexer_schedule_expression" {
   type        = string
   default     = "rate(1 day)"
 }
+
+variable "feedback_email" {
+  description = "Address that receives a mail when a reader votes on a post"
+  type        = string
+  default     = "katta.jayant@gmail.com"
+}
