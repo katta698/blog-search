@@ -45,6 +45,7 @@ resource "aws_lambda_function" "query" {
     variables = {
       INDEX_BUCKET    = aws_s3_bucket.index.id
       AWS_REGION_NAME = var.aws_region
+      FEEDBACK_TABLE  = aws_dynamodb_table.feedback.name
     }
   }
 }

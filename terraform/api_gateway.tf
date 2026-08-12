@@ -32,6 +32,21 @@ resource "aws_apigatewayv2_route" "summary" {
   target    = "integrations/${aws_apigatewayv2_integration.query.id}"
 }
 
+# Post feedback (added 2026-08-12) — same query Lambda again, dispatched on
+# method+path, same reasoning as /summary above: one more route beats one more
+# cold-starting function for an endpoint that takes a handful of hits a day.
+resource "aws_apigatewayv2_route" "feedback_vote" {
+  api_id    = aws_apigatewayv2_api.search.id
+  route_key = "POST /feedback"
+  target    = "integrations/${aws_apigatewayv2_integration.query.id}"
+}
+
+resource "aws_apigatewayv2_route" "feedback_counts" {
+  api_id    = aws_apigatewayv2_api.search.id
+  route_key = "GET /feedback"
+  target    = "integrations/${aws_apigatewayv2_integration.query.id}"
+}
+
 resource "aws_apigatewayv2_stage" "default" {
   api_id      = aws_apigatewayv2_api.search.id
   name        = "$default"

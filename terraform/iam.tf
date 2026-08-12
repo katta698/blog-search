@@ -99,6 +99,16 @@ data "aws_iam_policy_document" "query_permissions" {
       "arn:aws:bedrock:${var.aws_region}::foundation-model/amazon.nova-lite-v1:0"
     ]
   }
+
+  statement {
+    sid    = "FeedbackTable"
+    effect = "Allow"
+    actions = [
+      "dynamodb:PutItem",
+      "dynamodb:Query",
+    ]
+    resources = [aws_dynamodb_table.feedback.arn]
+  }
 }
 
 resource "aws_iam_role_policy" "query_permissions" {

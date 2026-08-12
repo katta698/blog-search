@@ -17,3 +17,13 @@ output "query_lambda_name" {
   description = "Lambda backing the search API"
   value       = aws_lambda_function.query.function_name
 }
+
+output "feedback_api_url" {
+  description = "Post feedback endpoint — set this as FEEDBACK_API_URL in sync_blog.py"
+  value       = "${aws_apigatewayv2_api.search.api_endpoint}/feedback"
+}
+
+output "feedback_table_name" {
+  description = "DynamoDB table holding post feedback votes"
+  value       = aws_dynamodb_table.feedback.name
+}

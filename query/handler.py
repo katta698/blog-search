@@ -5,7 +5,9 @@ import math
 from datetime import datetime
 import boto3
 
+
 INDEX_BUCKET = os.environ["INDEX_BUCKET"]
+FEEDBACK_TABLE = os.environ.get("FEEDBACK_TABLE", "")
 REGION = os.environ["AWS_REGION_NAME"]
 INDEX_KEY = "index/chunks.json"
 SUMMARY_KEY = "index/summaries.json"
@@ -14,6 +16,7 @@ CACHE_PATH = "/tmp/chunks.json"
 
 s3 = boto3.client("s3", region_name=REGION)
 bedrock = boto3.client("bedrock-runtime", region_name=REGION)
+dynamodb = boto3.client("dynamodb", region_name=REGION)
 
 _index_cache = None     # warm Lambda reuse
 _summary_cache = None   # warm Lambda reuse
@@ -67,21 +70,10 @@ def search(question_vec, chunks, top_k=TOP_K):
     return [c for _, c in scored[:top_k]]
 
 
-# Pure semantic search has no concept of "recency" — a question like
-# "what's your latest post" gets matched by *meaning*, not by date, so it
-# can easily surface an older post that happens to talk about being new or
-# recent. Detect that question intent explicitly (a recency word AND a
-# post-word present anywhere, regardless of order) and answer it from the
-# indexed post_date field instead of similarity score.
-RECENCY_WORDS = re.compile(r"\b(latest|newest|most recent|recently|recent|last)\b", re.IGNORECASE)
-POST_WORDS = re.compile(r"\b(post|blog|article|wrote|written|publish|published|writing)\b", re.IGNORECASE)
-
-
-def is_recency_question(question):
-    return bool(RECENCY_WORDS.search(question) and POST_WORDS.search(question))
-
-
 def latest_post_chunks(chunks):
+    # Used only for explicit date-based fallback (posts with post_date set).
+    # Recency questions are now handled by the synthetic metadata doc in the index,
+    # which semantic search finds naturally for any phrasing.
     dated = [c for c in chunks if c.get("post_date")]
     if not dated:
         return None
@@ -148,6 +140,11 @@ def lambda_handler(event, context):
     path = event.get("rawPath", "")
     if method == "GET" and path == "/summary":
         return handle_summary(event)
+    if path == "/feedback":
+        if method == "POST":
+            return handle_feedback_vote(event)
+        if method == "GET":
+            return handle_feedback_counts(event)
     return handle_search(event)
 
 
@@ -180,8 +177,6 @@ def handle_search(event):
         chunks = load_index()
 
         top_chunks = None
-        if is_recency_question(question):
-            top_chunks = latest_post_chunks(chunks)
         if not top_chunks:
             top_chunks = find_post_by_day_week(question, chunks)
 
@@ -203,6 +198,96 @@ def handle_search(event):
 
     except Exception as e:
         print(f"Error: {e}")
+        return _resp(500, {"error": "Internal server error"})
+
+
+# ── Post feedback ─────────────────────────────────────────────
+# Deliberately stores no free text and nothing identifying: a slug, a vote, an
+# optional reason drawn from a fixed list, and a timestamp. That is not a
+# privacy gesture for its own sake -- it means there is no moderation queue, no
+# PII to handle, and nothing an abusive submitter can put on the page. Readers
+# with something specific to say get a mailto link in the widget instead, which
+# routes the detail to a human without routing it through this table.
+VOTES = ("up", "down")
+REASONS = ("too-shallow", "too-long", "not-what-i-expected", "something-is-wrong")
+SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,120}$")
+
+
+def handle_feedback_vote(event):
+    try:
+        if not FEEDBACK_TABLE:
+            return _resp(503, {"error": "feedback is not configured"})
+        body = json.loads(event.get("body") or "{}")
+        slug = (body.get("slug") or "").strip()
+        vote = (body.get("vote") or "").strip()
+        reason = (body.get("reason") or "").strip()
+
+        # Validate against fixed sets rather than sanitising. Anything that is
+        # not one of the known values is a bug or a probe; either way it should
+        # not reach the table.
+        if not SLUG_RE.match(slug):
+            return _resp(400, {"error": "invalid slug"})
+        if vote not in VOTES:
+            return _resp(400, {"error": "vote must be up or down"})
+        if reason and reason not in REASONS:
+            return _resp(400, {"error": "unknown reason"})
+
+        item = {
+            "slug": {"S": slug},
+            # Random suffix so two votes in the same millisecond cannot
+            # overwrite each other -- the sort key is the only thing keeping
+            # them apart.
+            "voted_at": {"S": datetime.utcnow().isoformat(timespec="milliseconds")
+                              + "Z#" + os.urandom(4).hex()},
+            "vote": {"S": vote},
+        }
+        if reason:
+            item["reason"] = {"S": reason}
+
+        dynamodb.put_item(TableName=FEEDBACK_TABLE, Item=item)
+        return _resp(200, {"ok": True})
+    except Exception as e:
+        print(f"Error (feedback vote): {e}")
+        return _resp(500, {"error": "Internal server error"})
+
+
+def handle_feedback_counts(event):
+    """Aggregate counts for one post. Returns totals only, never individual
+    votes, so the endpoint cannot be used to reconstruct who said what when."""
+    try:
+        if not FEEDBACK_TABLE:
+            return _resp(503, {"error": "feedback is not configured"})
+        params = event.get("queryStringParameters") or {}
+        slug = (params.get("slug") or "").strip()
+        if not SLUG_RE.match(slug):
+            return _resp(400, {"error": "invalid slug"})
+
+        counts = {"up": 0, "down": 0}
+        reasons = {}
+        kwargs = {
+            "TableName": FEEDBACK_TABLE,
+            "KeyConditionExpression": "slug = :s",
+            "ExpressionAttributeValues": {":s": {"S": slug}},
+            "ProjectionExpression": "vote, reason",
+        }
+        while True:
+            page = dynamodb.query(**kwargs)
+            for it in page.get("Items", []):
+                v = it.get("vote", {}).get("S")
+                if v in counts:
+                    counts[v] += 1
+                r = it.get("reason", {}).get("S")
+                if r:
+                    reasons[r] = reasons.get(r, 0) + 1
+            token = page.get("LastEvaluatedKey")
+            if not token:
+                break
+            kwargs["ExclusiveStartKey"] = token
+
+        return _resp(200, {"slug": slug, "up": counts["up"],
+                           "down": counts["down"], "reasons": reasons})
+    except Exception as e:
+        print(f"Error (feedback counts): {e}")
         return _resp(500, {"error": "Internal server error"})
 
 

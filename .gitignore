@@ -3,3 +3,11 @@ __pycache__/
 *.pyo
 .DS_Store
 *.zip
+
+# Terraform local state and provider binaries — never commit these.
+# A provider plugin is a ~700 MB executable and lands in history permanently.
+# .terraform.lock.hcl is deliberately NOT ignored: it pins provider versions
+# and belongs in the repo.
+.terraform/
+*.tfstate
+*.tfstate.*
