@@ -213,8 +213,9 @@ def handle_search(event):
 VOTES = ("up", "down")
 REASONS = ("too-shallow", "too-long", "not-what-i-expected", "something-is-wrong")
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,120}$")
-# The sort key this service hands back: an ISO timestamp, then a random suffix.
-VOTE_ID_RE = re.compile(r"^\d{4}-\d\d-\d\dT[\d:.]+Z#[0-9a-f]{8}$")
+# The browser-generated voter id. Fixed-length hex, so a caller cannot use this
+# field to write arbitrary keys or unbounded data into the table.
+VOTER_RE = re.compile(r"^[0-9a-f]{16,32}$")
 
 
 def handle_feedback_vote(event):
@@ -236,39 +237,23 @@ def handle_feedback_vote(event):
         if reason and reason not in REASONS:
             return _resp(400, {"error": "unknown reason"})
 
-        # A down-vote arrives in two parts: the thumb first, then optionally a
-        # reason chip a moment later. The second call carries the id returned by
-        # the first and updates that row, because inserting again would count
-        # one unhappy reader twice. That is not hypothetical -- the first three
-        # real down-votes this table ever received were one person, recorded
-        # three times, before this existed.
-        vote_id = (body.get("id") or "").strip()
-        if vote_id:
-            if not VOTE_ID_RE.match(vote_id):
-                return _resp(400, {"error": "invalid id"})
-            if not reason:
-                return _resp(400, {"error": "id given without a reason"})
-            dynamodb.update_item(
-                TableName=FEEDBACK_TABLE,
-                Key={"slug": {"S": slug}, "voted_at": {"S": vote_id}},
-                UpdateExpression="SET #r = :r",
-                ExpressionAttributeNames={"#r": "reason"},
-                ExpressionAttributeValues={":r": {"S": reason}},
-                # Only annotate a row that exists. A bogus id must not create
-                # one, or the update path becomes a second way to insert.
-                ConditionExpression="attribute_exists(slug)",
-            )
-            notify(slug, vote, reason)
-            return _resp(200, {"ok": True, "id": vote_id})
+        voter = (body.get("voter") or "").strip()
+        if not VOTER_RE.match(voter):
+            return _resp(400, {"error": "invalid voter"})
 
-        # Random suffix so two votes in the same millisecond cannot overwrite
-        # each other -- the sort key is the only thing keeping them apart.
-        voted_at = (datetime.utcnow().isoformat(timespec="milliseconds")
-                    + "Z#" + os.urandom(4).hex())
+        # One row per voter per post, keyed on (slug, voter), so this PutItem
+        # overwrites rather than appends. That single fact covers three cases
+        # that each used to create a spurious extra vote: changing your mind,
+        # picking a reason chip a moment after the thumb, and clicking twice.
         item = {
             "slug": {"S": slug},
-            "voted_at": {"S": voted_at},
+            "voter": {"S": voter},
             "vote": {"S": vote},
+            # Kept as a plain attribute rather than part of the key. The key
+            # answers "who", the attribute answers "when", and only the first
+            # of those should decide whether a row is new.
+            "voted_at": {"S": datetime.utcnow().isoformat(
+                timespec="milliseconds") + "Z"},
         }
         if reason:
             item["reason"] = {"S": reason}
@@ -279,7 +264,7 @@ def handle_feedback_vote(event):
         # avoid the occasional duplicate would silently drop the majority of
         # down-votes -- the opposite of the point.
         notify(slug, vote, reason)
-        return _resp(200, {"ok": True, "id": voted_at})
+        return _resp(200, {"ok": True})
     except Exception as e:
         print(f"Error (feedback vote): {e}")
         return _resp(500, {"error": "Internal server error"})

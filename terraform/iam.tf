@@ -105,7 +105,6 @@ data "aws_iam_policy_document" "query_permissions" {
     effect = "Allow"
     actions = [
       "dynamodb:PutItem",
-      "dynamodb:UpdateItem",
       "dynamodb:Query",
     ]
     resources = [aws_dynamodb_table.feedback.arn]
