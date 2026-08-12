@@ -2,9 +2,7 @@ import hashlib
 import json
 import os
 import re
-import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
-from email.utils import parsedate_to_datetime
 import boto3
 import requests
 from bs4 import BeautifulSoup
@@ -16,7 +14,7 @@ from bs4 import BeautifulSoup
 # re-fetching the same frozen set of posts forever. RSS_FEED_URL gives the
 # current list of posts; the indexer then fetches each post's actual page
 # for full text, since the RSS <description> is only a short excerpt.
-RSS_FEED_URL = os.environ.get("RSS_FEED_URL", "https://jayanthkatta.com/blog/rss.xml")
+BLOG_INDEX_URL = os.environ.get("BLOG_INDEX_URL", "https://jayanthkatta.com/blog/")
 RESUME_URL = os.environ.get("RESUME_URL", "https://jayanthkatta.com/resume.html")
 INDEX_BUCKET = os.environ["INDEX_BUCKET"]
 REGION = os.environ["AWS_REGION_NAME"]
@@ -33,43 +31,40 @@ bedrock = boto3.client("bedrock-runtime", region_name=REGION)
 
 
 def fetch_all_posts():
-    resp = requests.get(RSS_FEED_URL, timeout=30)
+    # Read every post URL from blog/index.html post cards — this is the single
+    # source of truth for all posts (Blogger-era and new direct-to-GitHub posts
+    # alike). RSS is no longer used: Blogger was retired and rss.xml is frozen.
+    resp = requests.get(BLOG_INDEX_URL, timeout=30)
     resp.raise_for_status()
-    root = ET.fromstring(resp.content)
+    soup = BeautifulSoup(resp.text, "html.parser")
+
+    entries = []
+    for tag in soup.find_all("a", class_=lambda c: c and "post-card" in c):
+        href = tag.get("href", "")
+        if not href or not href.startswith("/blog/"):
+            continue
+        url = "https://jayanthkatta.com" + href
+        title = tag.get("data-title", "") or tag.get_text(separator=" ", strip=True)[:80]
+        entries.append({"url": url, "title": title})
+
+    print(f"blog/index.html: found {len(entries)} post cards")
 
     posts = []
-    for item in root.iter("item"):
-        title_el = item.find("title")
-        link_el = item.find("link")
-        date_el = item.find("pubDate")
-        title = title_el.text if title_el is not None and title_el.text else ""
-        link = link_el.text if link_el is not None and link_el.text else None
-        if not link:
+    for rank, entry in enumerate(entries):
+        url, title = entry["url"], entry["title"]
+        try:
+            page = requests.get(url, timeout=30)
+            page.raise_for_status()
+        except Exception as e:
+            print(f"  skipping {url}: {e}")
             continue
-
-        post_date = None
-        if date_el is not None and date_el.text:
-            try:
-                post_date = parsedate_to_datetime(date_el.text).isoformat()
-            except (TypeError, ValueError):
-                post_date = None
-
-        page = requests.get(link, timeout=30)
-        page.raise_for_status()
-        soup = BeautifulSoup(page.text, "html.parser")
-        content = soup.find(id="jk-post") or soup
-
+        psoup = BeautifulSoup(page.text, "html.parser")
+        content = psoup.find(id="jk-post") or psoup
         text = content.get_text(separator=" ")
         text = re.sub(r"\s+", " ", text).strip()
         if text:
-            # Prepend the title so every chunk of this post carries it, not
-            # just metadata attached after the fact. Without this, searching
-            # by the post's own title/number ("Day 15", "Week 6") fails —
-            # those words never otherwise appear in the body text, so a
-            # semantic match against the embedded chunks has nothing to
-            # latch onto even though the post obviously exists.
             text = f"Title: {title}. {text}" if title else text
-            posts.append({"title": title, "url": link, "text": text, "date": post_date})
+            posts.append({"title": title, "url": url, "text": text, "date": None, "rank": rank})
 
     return posts
 
@@ -225,8 +220,28 @@ def lambda_handler(event, context):
     )
     print(f"Wrote {len(summaries)} summaries to s3://{INDEX_BUCKET}/{SUMMARY_KEY}")
 
+    # Synthetic metadata document describing post order — picked up by semantic
+    # search for any recency phrasing ("today's post", "new post", "what did you
+    # publish", etc.) without relying on a brittle keyword list in the query Lambda.
+    top5 = posts[:5]
+    recency_lines = "\n".join(
+        f"{i+1}. {p['title']} — {p['url']}" for i, p in enumerate(top5)
+    )
+    recency_text = (
+        f"Blog post publication order (most recent first). "
+        f"The latest post, today's post, and the newest post is: {top5[0]['title']} at {top5[0]['url']}. "
+        f"Recent posts in order:\n{recency_lines}"
+    )
+    recency_doc = {
+        "title": "Blog post index — most recent first",
+        "url": top5[0]["url"],
+        "text": recency_text,
+        "date": None,
+        "rank": -1,  # sentinel: this is a metadata doc, not a real post
+    }
+
     records = []
-    for post in posts + resume_docs:
+    for post in [recency_doc] + posts + resume_docs:
         for chunk in chunk_text(post["text"]):
             vector = embed(chunk)
             records.append(
@@ -234,6 +249,7 @@ def lambda_handler(event, context):
                     "post_title": post["title"],
                     "post_url": post["url"],
                     "post_date": post["date"],
+                    "post_rank": post.get("rank"),
                     "chunk_text": chunk,
                     "embedding": vector,
                 }
