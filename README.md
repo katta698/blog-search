@@ -186,3 +186,35 @@ curl -s -X POST "https://37arp5b92a.execute-api.us-east-1.amazonaws.com/search" 
 | Embedding model | `amazon.titan-embed-text-v2:0` (Bedrock) |
 | Answer model | `amazon.nova-lite-v1:0` (Bedrock) |
 | AWS account | 684346483786, us-east-1 |
+
+## Before every `terraform apply`
+
+```bash
+python scripts/check_lambda_drift.py
+```
+
+Terraform deploys each Lambda from a zip under `dist/`, and decides whether to
+deploy by comparing that zip's hash against its state. Neither knows what is
+actually running in AWS, so a zip that is *older* than the deployed function is
+not a conflict Terraform can see — it is just a different hash, and applying
+silently replaces live code with the older copy. The plan looks identical to a
+legitimate deploy.
+
+Both halves of that have already happened here, on 2026-08-12:
+
+- `dist/query.zip` was dated 23 July while the deployed function carried the
+  `/summary` feature added on the 24th, because that change had been built and
+  deployed from a working copy and never committed. Applying would have removed
+  At a glance from every post.
+- `dist/indexer.zip` was rebuilt containing `handler.py` alone, dropping the
+  bundled `requests` and `beautifulsoup4`. That one *was* applied, and the
+  indexer failed with `ImportModuleError` until it was rebuilt properly.
+
+The check compares the deployed package against the local zip in both
+directions — source *and* file list — and exits non-zero if deploying would
+remove anything. `scripts/build_lambdas.sh` runs it automatically and refuses to
+report success if it fails.
+
+**Deploying and committing are independent here.** A Lambda ships by building a
+zip and running `terraform apply`; git is not involved at any point. That is how
+code ends up live and untracked, which is the root of both incidents above.

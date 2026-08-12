@@ -17,18 +17,9 @@ build() {
     --platform manylinux2014_x86_64 --only-binary=:all: --python-version 3.12
   cp "$src/handler.py" "$out/handler.py"
 
-  python -c "
-import zipfile, os, sys
-out = sys.argv[1]
-dst = sys.argv[2]
-with zipfile.ZipFile(dst, 'w', zipfile.ZIP_DEFLATED) as zf:
-    for root, dirs, files in os.walk(out):
-        dirs[:] = [d for d in dirs if d != '__pycache__']
-        for f in files:
-            if not f.endswith('.pyc'):
-                full = os.path.join(root, f)
-                zf.write(full, os.path.relpath(full, out))
-" "$(cygpath -w "$out")" "$(cygpath -w "$DIST/$name.zip")"
+  # Deterministic zip: same code in, same bytes out, so "the hash changed"
+  # means "the code changed" rather than "someone rebuilt".
+  python "$REPO_ROOT/scripts/build_zip.py" "$(cygpath -w "$out")" "$(cygpath -w "$DIST/$name.zip")"
   echo "    -> $DIST/$name.zip"
 }
 
@@ -36,5 +27,12 @@ mkdir -p "$DIST"
 build indexer
 build query
 
+echo ""
+echo "Checking the built zips against what is actually deployed..."
+python "$REPO_ROOT/scripts/check_lambda_drift.py" || {
+  echo ""
+  echo "Refusing to call this a successful build. Fix the above before applying."
+  exit 1
+}
 echo ""
 echo "Done. Run 'terraform apply' from terraform/ to deploy."
