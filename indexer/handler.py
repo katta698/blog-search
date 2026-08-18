@@ -2,6 +2,7 @@ import hashlib
 import json
 import os
 import re
+import time
 from datetime import datetime, timezone
 import boto3
 import requests
@@ -34,6 +35,56 @@ CHUNK_OVERLAP = 50 # words of overlap between chunks
 
 s3 = boto3.client("s3", region_name=REGION)
 bedrock = boto3.client("bedrock-runtime", region_name=REGION)
+
+
+def fetch_page(url, attempts=3):
+    """GET a post page, retrying a transient failure before giving up.
+
+    One 503 from GitHub Pages, on one page out of 118, failed a whole publish
+    run on 2026-08-18. The page was fine seconds later -- a manual re-run indexed
+    all 118 -- but the first run skipped it, produced a 117-post index, and the
+    completeness guard in on-publish.yml correctly refused to accept it.
+
+    That guard is doing its job and must stay. What was wrong is that a single
+    momentary hiccup, across 118 sequential fetches, had no second chance. At
+    that many requests a transient is not an edge case; it is a matter of time.
+
+    Retries only what can plausibly succeed on a second try: a connection error,
+    a timeout, or a 5xx / 408 / 429 from the edge. A 404 is an answer, not a
+    hiccup -- retrying it wastes 6 seconds per post and still fails, so it
+    returns immediately and lets the caller record the miss.
+
+    Backoff is linear and short. The Lambda has a 300s budget and used 71s for
+    114 posts; three attempts at 2s and 4s costs at most 6s per genuinely dead
+    page, which is affordable for the few, and nothing at all for the many.
+    """
+    transient = (408, 429, 500, 502, 503, 504)
+    for attempt in range(1, attempts + 1):
+        try:
+            page = requests.get(url, timeout=30)
+        except Exception as e:                                    # noqa: BLE001
+            if attempt == attempts:
+                print(f"  FAILED {url}: {e} (after {attempts} attempts)")
+                return None
+            print(f"  retrying {url}: {e} (attempt {attempt})")
+            time.sleep(2 * attempt)
+            continue
+        if page.status_code in transient:
+            if attempt == attempts:
+                print(f"  FAILED {url}: HTTP {page.status_code} "
+                      f"(after {attempts} attempts)")
+                return None
+            print(f"  retrying {url}: HTTP {page.status_code} "
+                  f"(attempt {attempt})")
+            time.sleep(2 * attempt)
+            continue
+        try:
+            page.raise_for_status()
+        except Exception as e:                                    # noqa: BLE001
+            print(f"  FAILED {url}: {e}")
+            return None
+        return page
+    return None
 
 
 def fetch_all_posts():
@@ -81,11 +132,8 @@ def fetch_all_posts():
     posts, failed = [], []
     for rank, entry in enumerate(entries):
         url, title = entry["url"], entry["title"]
-        try:
-            page = requests.get(url, timeout=30)
-            page.raise_for_status()
-        except Exception as e:
-            print(f"  FAILED {url}: {e}")
+        page = fetch_page(url)
+        if page is None:
             failed.append(url)
             continue
         psoup = BeautifulSoup(page.text, "html.parser")
