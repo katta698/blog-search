@@ -20,28 +20,67 @@ bedrock = boto3.client("bedrock-runtime", region_name=REGION)
 dynamodb = boto3.client("dynamodb", region_name=REGION)
 sns = boto3.client("sns", region_name=REGION)
 
-_index_cache = None     # warm Lambda reuse
-_summary_cache = None   # warm Lambda reuse
+# Warm-container caches, keyed on the S3 object's ETag rather than held for the
+# life of the container.
+#
+# Holding them unconditionally is what made "At a glance" appear broken on every
+# newly published post. Traced on 2026-08-19: the indexer wrote a summary for
+# gcp-architecture-project-lifecycle at 12:30:16, and the API returned 404 for it
+# for the next twenty minutes because one container -- started 12:26:34, four
+# minutes before that write -- served all 55 requests in the period from the copy
+# it had read once at start-up. The post was correct, S3 was correct, and the API
+# was confidently serving a file from before the post existed.
+#
+# It looked like a per-cloud problem because the Azure post published the same day
+# made that container's snapshot by 33 seconds and the GCP one missed it by four
+# minutes. Nothing about the two posts differed; whichever published either side
+# of a container start-up won.
+#
+# A HEAD is a few milliseconds and no data transfer, against a GET of a ~100 KB
+# index on every request. The ETag changes whenever the indexer rewrites the
+# object, so a publish is visible on the next request rather than whenever AWS
+# happens to recycle the container -- which on a quiet site is hours.
+_index_cache = None
+_index_etag = None
+_summary_cache = None
+_summary_etag = None
+
+
+def _current_etag(key):
+    """ETag of an index object, or None if it is missing or S3 is unreachable.
+
+    Never raises: a HEAD failure must not take down search or the summary
+    endpoint when a perfectly good cached copy is already in memory.
+    """
+    try:
+        return s3.head_object(Bucket=INDEX_BUCKET, Key=key)["ETag"]
+    except Exception:                                          # noqa: BLE001
+        return None
 
 
 def load_index():
-    global _index_cache
-    if _index_cache is not None:
+    global _index_cache, _index_etag
+    etag = _current_etag(INDEX_KEY)
+    if _index_cache is not None and (etag is None or etag == _index_etag):
         return _index_cache
     obj = s3.get_object(Bucket=INDEX_BUCKET, Key=INDEX_KEY)
     _index_cache = json.loads(obj["Body"].read())
+    _index_etag = obj.get("ETag", etag)
     return _index_cache
 
 
 def load_summaries():
-    global _summary_cache
-    if _summary_cache is not None:
+    global _summary_cache, _summary_etag
+    etag = _current_etag(SUMMARY_KEY)
+    if _summary_cache is not None and (etag is None or etag == _summary_etag):
         return _summary_cache
     try:
         obj = s3.get_object(Bucket=INDEX_BUCKET, Key=SUMMARY_KEY)
         _summary_cache = json.loads(obj["Body"].read())
+        _summary_etag = obj.get("ETag", etag)
     except s3.exceptions.NoSuchKey:
         _summary_cache = {}
+        _summary_etag = None
     return _summary_cache
 
 
